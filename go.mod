@@ -1,3 +1,3 @@
-module go-learn
+module go_learn
 
 go 1.14

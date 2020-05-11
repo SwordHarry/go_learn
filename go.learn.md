@@ -100,7 +100,7 @@ func f() {
     global = &x
 }
 ```
-x 变量使用了堆空间
+x 变量使用了堆空间，x从f中逃逸了
 
 避免在长生命周期对象中保持短生命周期对象不必要的指针
 
@@ -175,7 +175,7 @@ init 函数不能被调用和引用
 词法块
 包含了全部源代码的词法块，叫全局块
 
-## 第三章 基本数据*
+## 第三章 基本数据
 
 Go的数据类型有：
 - 基础类型
@@ -202,6 +202,10 @@ int ,uint
 大小与原生相同，或等于平台上运行效率最高的值
 
 uintptr ，大小不明确，但可完整存放指针
+
+rune 指unicode码
+
+byte 指ascii 码
 
 ### 3.2 浮点数
 float32
@@ -528,7 +532,7 @@ if age, ok := ages["bob"]; !ok {
 
 注意如何使用 `!ok` 来区分“元素不存在”和“元素存在但值为零” 的情况
 
-
+注意：map中的元素并不是一个变量，所以我们不能对map的元素进行取址操作
 
 ##### 将 slice 用作键
 
@@ -727,3 +731,846 @@ Json到Go数据结构
 通过合理定义Go的数据结构，可以选择哪部分JSON数据解码到结构体对象中，哪些数据可以丢弃。
 
 在 unMarshal 过程中是忽略大小写的
+
+
+
+### 4.6 文本和HTML模板
+
+双大括号指定输出，支持循环，管道
+
+Text/template和html/template包，后者可以自动转义
+
+
+
+## 第5章 函数
+
+```go
+func name(parameter-list) (result-list) {
+  body
+}
+```
+
+注意是值传递，则若传递slice进行递归，它并不会修改调用者原来传递的元素，所以当被调函数返回时，调用者的栈依旧保持原样。
+
+Go语言针对递归使用了可变长度的栈，可达到1G左右
+
+### 5.3 多返回值
+
+```go
+func findLinks(url string) ([]string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("getting %s: %s", url, resp.Status)
+	}
+	doc, err := html.Parse(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s as HTML: %v", url, err)
+	}
+	return visit(nil, doc), nil
+}
+```
+
+保证resp.Body正确关闭使得网络资源正常释放。即使在发生错误的情况下也必须释放资源。Go语言的垃圾回收机制将回收未使用的内存，但不能指望它会释放未使用的操作系统资源，比如打开的文件和网络连接，必须显式关闭。
+
+可以给返回值分别命名，尤其在一个函数返回多个结果且类型相同时，名字的选择很重要，如：
+
+```go
+func Size(rect image.Rectangle) (width, height int)
+```
+
+#### 裸返回
+
+应保守使用
+
+### 5.4 错误
+
+如果错误只有一种情况，通常作为最后一个结果，返回布尔类型
+
+对于IO操作，如果错误原因多样，则错误结果是error
+
+error 是内置的接口类型
+
+尽管Go有异常机制，但Go语言的异常只是针对程序bug导致的预期外的结果。
+
+#### 5.4.1 错误处理策略
+
+1. 将错误传递下去
+   - 直接传递
+   - 构建一个新的错误信息
+   - fmt.Errorf 使用 fmt.Sprintf 函数格式化一条错误消息并且返回一个新的错误值
+2. 对于不固定或不可预测的错误，进行重试，超出一定时间或者次数后再报错退出
+3. 主程序部分：输出错误，停止程序。库函数应当将错误传递给调用者。log.Fatalf 将时间和日期作为前缀添加到错误信息前；或自定义log包的前缀，并将日期和时间略去
+4. 只记录下错误信息然后程序继续运行，用log包添加日志前缀
+5. 忽略
+
+```go
+func mayBeError() {
+  data, error := handle()
+  if error != nil {
+    //...
+  }
+  
+  // func-body
+  return
+}
+```
+
+#### 5.4.2 文件结束标识
+
+io.EOF
+
+### 5.5 函数变量
+
+函数类型的零值是 nil，且本身不可比较，不可作为键出现在map中。
+
+函数可以作为参数或者返回值使用
+
+### 5.6 匿名函数
+
+```go
+strings.Map(func(r rune) rune { return r + 1 }, "HAL-9000")
+```
+
+闭包
+
+变量的生命周期不是由它的作用域所决定的
+
+当匿名函数进行递归时，必须先声明一个变量对匿名函数进行赋值。如果两个步骤合并成一个声明，函数字面量将不能存在于变量的作用域中，就不能递归调用自己了
+
+```go
+visitAll := func(items []string) {
+  // ...
+  visitAll(m[item]) // undefined: visitAll
+  // ...
+}
+```
+
+#### 捕获迭代变量
+
+类比js的循环闭包，go也有同样的问题
+
+### 5.7 变长函数
+
+可变的参数个数，用省略号表示，并且只能是最后一个参数
+
+```go
+func sum(vals ...int) int {
+  total := 0
+  for _, val := range vals {
+    total += val
+  }
+  return total
+}
+```
+
+Vals 是一个int类型的 slice
+
+调用：
+
+```go
+values := []int {1, 2, 3, 4}
+sum(values...)
+```
+
+**注意：**尽管 ...int 参数就像函数体内的 slice，但变长函数的类型和一个带有普通 slice 参数的函数类型不相同
+
+`interface {}`意味着参数可以接受任何值
+
+#### 总结 变长函数
+
+- 省略号表示
+- 会被转换成 slice
+
+### 5.8 延迟函数调用
+
+#### defer 机制
+
+Defer 语句通常用于成对的操作，如打开关闭，链接断开，加锁解锁，即使是再复杂的控制流，资源在任何情况下都能正确释放。
+
+实际调用推迟到包含defer 语句的函数结束后才执行，defer 没有限制使用次数，执行的时候调用defer 语句顺序为**倒序**进行。
+
+延迟执行的匿名函数甚至能改变外层函数返回给调用者的结果：
+
+```go
+func triple(x int) (result int) {
+  defer func() { result += x }
+  return x + x
+}
+
+fmt.Println(triple(4)) // 12
+```
+
+#### 文件描述符
+
+一个 Linux 进程可以打开成百上千个文件，为了表示和区分已经打开的文件，Linux 会给每个文件分配一个编号（一个 ID），这个编号就是一个整数，被称为文件描述符（File Descriptor）。
+
+循环打开文件但是循环defer，有可能会耗尽文件描述符
+
+一种解决方式是将循环体（包括defer语句）放到另一个函数里，在循环迭代后都会调用文件关闭函数。
+
+#### 总结 defer
+
+- 当defer被声明时，其参数就会被实时解析
+
+  ```go
+  func a() {
+    i := 0
+    defer fmt.Println(i) //输出0，因为i此时就是0
+    i++
+    defer fmt.Println(i) //输出1，因为i此时就是1
+    return
+  }
+  ```
+
+- defer 的顺序为先进后出
+
+- defer即`在return执行完，函数退出前执行`。所以defer执行时可修改函数返回值（不推荐这么做）。
+
+### 5.9 宕机
+
+内置函数 panic 可以主动发生宕机
+
+宕机发生时，正常程序执行会终止， goroutine 中的所有延迟函数会执行，程序异常退出并留下一条日志消息。
+
+日志消息包括宕机的值，代表某种错误，goroutine 则在宕机时显示一个函数调用的栈跟踪消息。
+
+只在发生严重错误时才会使用宕机
+
+Defer 会在执行的函数在栈清理前调用
+
+### 5.10 恢复
+
+recover 函数在延迟函数内部调用，且包含该defer 语句的函数发生宕机，recover会终止当前的宕机状态并返回宕机的值。函数会从之前宕机的地方继续运行并正常返回。
+
+如果 recover 在其他任何情况下运行则它没有任何效果且返回 nil
+
+不应该随意恢复宕机
+
+当一个 panic 被恢复后，调度并因此中断，会重新进入调度循环，进而继续执行 recover 后面的代码， 包括比 recover 更早的 defer（因为已经执行过得 defer 已经被释放，而尚未执行的 defer 仍在 goroutine 的 defer 链表中）， 或者 recover 所在函数的调用方。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	a := returnN()
+	fmt.Println(a)
+}
+
+func returnN() (result int) {
+	defer func() {
+		if p := recover(); p != nil {
+			result = p.(int)
+			fmt.Println(p)
+		}
+	}()
+	panic(3)
+}
+```
+
+Panic 的值会成为 recover 的返回值
+
+## 第 6 章 方法
+
+封装和组合
+
+方法声明在函数名字前多了一个参数，该参数把这个方法绑定到该参数对应的类型上
+
+```go
+func (p Point) Distance(q Point) float64 {
+  return math.Hypot(q.X - p.X, q.Y - p.Y)
+}
+
+p.Distance(q)
+```
+
+附加的参数p为方法的接收者
+
+p.Distance 成为**选择子**，它为接收者p 选择合适的 Distance 方法
+
+Go 可以将方法绑定到任何类型上，如
+
+```go
+type Path []Point
+
+// Distance returns the distance traveled along the path.
+func (path Path) Distance() float64 {
+	sum := 0.0
+	for i := range path {
+		if i > 0 {
+			sum += path[i-1].Distance(path[i])
+		}
+	}
+	return sum
+}
+```
+
+只要其类型不是指针和接口，则任何类型都可以声明方法
+
+方法命名一般比函数更简短
+
+### 6.2 指针接收者的方法
+
+主调函数会复制每一个实参变量，如果函数需要更新变量，就必须使用指针来传递变量的地址
+
+```go
+func (p *Point) ScaleBy(factor float64) {
+  p.X *= factor
+  p.Y *= factor
+}
+```
+
+习惯上都使用指针接收者。为了防止混淆，不允许本身是指针类型进行方法声明
+
+```go
+p := Point{1, 2}
+(&p).ScaleBy(2)
+fmt.Println(p) // {2, 4}
+```
+
+实际上方法调用可以简写成
+
+```go
+p.ScaleBy(2)
+```
+
+编译器会对变量进行 &p 的隐式转换。
+
+故不能够对一个不能取地址的Point 接收者参数调用 *Point 方法，因为无法获取临时变量的地址
+
+#### 接收者隐式转换机制
+
+实际上，Go 编译器有隐式转换机制：
+
+1. 实参和形参都是 *T 或者 T，不发生转换
+2. 实参是T，形参是 *T，编译器会隐式获取变量地址`p -> (&p)`
+3. 实参是*T，形参是 T，编译器会隐式解引用求值`p -> *p`
+
+但无法获取临时变量的地址
+
+```go
+func main() {
+	p := Point{1,2}
+	p.ScaleBy(2)
+	//等价于
+	//(&p).ScaleBy(2)
+	fmt.Println(p)
+	pptr := &Point{3,3}
+	pptr.ScaleBy(2)
+	// 等价于
+	//(*pptr).ScaleBy(2)
+	fmt.Println(*pptr)
+
+	//Point{1,2}.ScaleBy(2) // 临时变量T 无法 变成 *T
+	//pptr.ScaleBy2(2) // *T 可以变成 T
+}
+```
+
+### 6.3 结构体内嵌组成类型
+
+结构体内嵌不仅能复用类型，还能复用方法
+
+```go
+type ColoredPoint struct {
+  Point
+  Color color.RGBA
+}
+```
+
+Point 的方法都被纳入到 ColoredPoint类型中
+
+ColoredPoint并不是Point，但是它包含一个Point
+
+内嵌的字段会告诉编译器生成额外的包装方法来调用Point声明的方法
+
+但是，当形参是Point的时候，必须显式使用它
+
+```go
+p.Distance(q.Point)
+```
+
+### 6.4 方法变量与表达式
+
+可以将选择子`p.Distance`赋值给方法变量，这样函数只需要提供实参而不需要提供接收者就能调用，这样的变量为方法变量
+
+#### 方法表达式
+
+方法表达式写成 T.f 或者 (*T).f，其中 T 是类型，把原来方法的接收者替换成函数的第一个形参了，使得其可以像平常函数一样调用
+
+```go
+distance := Point.Distance // 方法表达式
+distance(p, q) // 相当于 p.Distance(q)
+```
+
+### 6.5 位向量
+
+数据结构用 slice：[]uint 64 实现 IntSet
+
+位运算
+
+### 6.6 封装
+
+在Go 语言中封装的单元是包而不是类型
+
+## 第7章 接口
+
+抽象类型，隐式实现
+
+隐式实现指某类型实现这个接口所指定的内容，即为该接口的实现。不需要关键词进行说明
+
+```go
+type Writer interface {
+  Write(p []byte) (n int, err error)
+}
+
+type ByteCounter int
+func (c *ByteCounter) Write(p []byte) (int, error) {
+  *c += ByteCounter(len(p))
+  return len(p), nil
+}
+```
+
+则 ByteCounter 隐式实现了 Writer
+
+可取代性
+
+可以通过组合已有接口得到新的接口
+
+```go
+type ReadWriter interface {
+  Reader
+  Writer
+}
+```
+
+如上语法为嵌入式接口
+
+空接口类型 interface{} 能接受任意类型的值
+
+可以用接口实现类型共性
+
+### 7.5 接口值
+
+接口类型的值其实有两部分：具体类型和该类型的值。二者称为接口的动态类型和动态值
+
+ ```go
+var w io.Writer
+w = os.Stdout
+w = new(bytes.Buffer)
+w = nil
+ ```
+
+类型描述符
+
+动态分发：编译器必须生成一段代码来从类型描述符拿到名为Write的方法地址，再间接调用该方法
+
+第二行类型为指针类型 *os.File ，值指向了代表进程标准输出的 os.File 类型的指针
+
+第三行类型为 *bytes.Buffer，值是一个指向新分配缓冲区的指针 data []byte
+
+#### 接口的比较
+
+如果两个接口都是 nil 或 二者的动态类型一致且动态值相等（使用动态类型的==操作符进行比较），则两个接口值相等
+
+若对应的动态值不可比较（如 slice），则会崩溃
+
+调试的时候，拿到接口值的动态类型很有帮助，可以使用 fmt 包的 %T 来实现这个需求
+
+fmt 内部使用反射来获取动态类型的名字
+
+#### 含有空指针的非空接口
+
+空的接口值（其中不含任何信息）和动态值为 nil 的接口值不同，这是陷阱
+
+如下将会报错
+
+```go
+const debug = false
+
+func main() {
+	var buf *bytes.Buffer
+	// var buf io.Writer
+	if debug {
+		buf = new(bytes.Buffer)
+	}
+	f(buf)
+}
+
+func f(out io.Writer) {
+	fmt.Println(out != nil)
+	if out != nil {
+		out.Write([]byte("done!\n"))
+	}
+}
+```
+
+out 的动态值为空，但它的动态类型是 *bytes.Buffer，表示 out 是一个包含空指针的非空接口，所以 out != nil 为 true
+
+解决方案是将 buf 声明为 io.Writer
+
+### 7.6 sort.Interface
+
+sort包提供了针对任意序列根据任意排序函数原地排序的功能
+
+满足sort.Interface 接口
+
+```go
+type Interface interface {
+  Len() int
+  Less(i, j int) bool // i, j 是序列的下标
+  Swap(i, j int)
+}
+```
+
+`sort.Strings` 用于 slice []string 的排序
+
+sort.Reverse
+
+sort.IsSorted
+
+### 7.7 http.Handler
+
+```go
+package http
+
+type Handler interface {
+  ServeHTTP(w ResponseWriter, r *Request)
+}
+func ListenAndServe(address string, h Handler) error
+```
+
+req *http.Request
+
+req.URL.Path 路径
+
+#### 请求多工转发器 ServeMux
+
+http.NewServeMux()
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/index", http.HandlerFunc(db))
+```
+
+http.HandleFunc 其实是类型转换，而不是函数调用
+
+```go
+package http
+
+type HandlerFunc func(w ResponseWriter, r *Request)
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+  f(w, r)
+}
+```
+
+同时也是一个函数类型，采用了适配器模式
+
+### 7.8 error 接口
+
+Error 实际上是一个接口类型，包含返回错误消息的方法
+
+```go
+type error interace {
+  Error() string
+}
+```
+
+完整error 包只有4行代码
+
+```go
+package errors
+
+func New(text string) error {
+	return &errorString{text}
+}
+
+// errorString is a trivial implementation of error.
+type errorString struct {
+	s string
+}
+
+func (e *errorString) Error() string {
+	return e.s
+}
+```
+
+没有直接用字符串，为了避免将来无意间的布局变更
+
+fmt.Errorf 封装了 errors，额外提供字符串格式化功能
+
+### 7.10 类型断言
+
+类型断言是作用在接口值上的操作，x.(T)
+
+- 若T是具体类型：检查动态类型是否就是T
+  - 是，类型 为T，结果为x的动态值；类型从接口类型变为具体类型了
+- T是接口类型：检查动态类型是否满足T
+  - 是，从一个接口变为另一个拥有更多方法的接口；但保留接口值中的动态类型和动态值部分
+- 上述若检查失败，则崩溃，可以用ok结果防止崩溃，多返回一个布尔型的返回值指示断言是否成功；ok为false，则第一个返回值为断言类型的零值
+
+若操作数为空接口值，类型断言都失败
+
+```go
+var w io.Writer = os.Stdout
+f, ok := w.(*os.FIle) // 成功 ok, f == os.Stdout
+b, ok := w.(*bytes.Buffer) // 失败 !ok, b == nil
+```
+
+### 7.11 使用类型断言来识别错误
+
+IO失败原因有很多，但有三类原因必须单独处理：
+
+- 文件已存储，创建操作
+- 文件没找到，读取操作
+- 权限不足
+
+```go
+package os
+func IsExist(err error) bool
+func IsNotExist(err error) bool
+func IsPermission(err error) bool
+```
+
+```go
+func IsNotExist(err error) bool {
+  if pe, ok := err.(*PathError); ok {
+    err = pe.Err
+  }
+  return err == syscall.ENOENT || err == ErrNotExist
+}
+```
+
+错误识别通常必须在失败操作发生时马上处理，而不是等到错误消息返回给调用者之后
+
+#### io.WriteString
+
+避免多余的内存分配和内存复制，回收
+
+### 7.13 类型分支
+
+接口有两种不同风格
+
+- 第一种风格，强调了方法，而不是具体类型，子类型多态
+- 第二种风格，把接口作为这些类型的联合来使用，强调满足这个接口的具体类型，而不是这个接口的方法，不注重信息隐藏，称为可识别联合。为特设多态
+
+类型分支：操作数为x.(type)，每个分支是一个或多个类型。类型分支的分支判定基于接口值的动态类型。其中 nil 分支需要 x==nil
+
+```go
+switch x.(type): {
+  case nil:
+  case int, uint:
+  case bool:
+  case string:
+  default:
+}
+```
+
+类型分支不允许使用 fallthrough
+
+可以把分支中提取出来的原始值绑定到新变量
+
+```go
+switch x := x.(type) { /*...*/ }
+```
+
+类型断言隐式创建了一个词法块
+
+## 第8章 goroutine和通道
+
+### 8.1 goroutine
+
+每个并发执行的活动为 goroutine
+
+```go
+go f()
+```
+
+### 8.4 通道
+
+通道是goroutine 的链接。每个通道是一个具体类型的管道，叫做通道的元素类型
+
+如int
+
+```go
+chan int
+```
+
+#### 通道的比较
+
+同种类型可以使用==符号，当二者都是同一个通道数据的引用时，为true,也可以和nil 比较
+
+#### 发送和接收
+
+```go
+ch <- x // 发送语句
+x = <- ch // 赋值语句中的接收表达式
+<- ch // 接收，并丢弃
+```
+
+#### 关闭
+
+```go
+close(ch)
+```
+
+设置一个标志位来指示值当前已经发送完毕，这个通道后面没有值了
+
+关闭后的发送操作将导致宕机
+
+接收操作将获取所有已发送的值，直到通道为空；这时任何接收都会立即完成，同时获取到通道元素类型对应的零值
+
+#### 无缓冲通道
+
+make函数接受第一个可选参数（go使用变长参数取代可选参数），表示通道容量，若为0，则创建一个无缓冲通道
+
+无缓冲通道 的发送和接收都将会阻塞，直到另一个goroutine在对应的通道上执行接收和发送
+
+如此，无缓冲通道也叫同步通道
+
+通道除了发送值得时候，若没有携带额外信息，则为事件，目的是进行同步
+
+#### 8.4.2 管道
+
+通道用来连接goroutine，一个输出是另一个输入
+
+判断通道是否关闭，可以用第二个返回值bool ok
+
+```go
+x, ok := <- myChannel
+```
+
+为 true 时表示接收成功，false 表示在一个关闭且读完的通道上
+
+但由于该模式通用，所以提供了 for range 在通道上迭代，接收完最后一个值后关闭循环
+
+```go
+for x:= range myChannel {
+  
+}
+```
+
+结束时的关闭close，垃圾回收器根据其是否可达决定是否回收，而不是根据是否关闭
+
+试图关闭一个已经关闭的通道将宕机，就像关闭空通道一样
+
+通道的关闭可以作为广播机制
+
+#### 8.4.3 单向通道类型
+
+当一个通道用作函数的形参时，它几乎总是被有意地限制不能发送或不能接收
+
+故Go提供单向通道类型。chan <- int 只能发送和 <- chan in 只能接收
+
+close 操作说明通道上没有数据再发送，仅仅可以在发送方 chan<- int 上调用，所以试图关闭一个仅能接收的通道将报错
+
+在任何赋值操作中将双向通道转换成单向通道都是允许的，但反过来不行
+
+
+
+#### 8.4.4 缓冲通道
+
+缓冲通道有一个元素队列
+
+```go
+ch = make(chan string, 3)
+```
+
+通道不满，则不会阻塞
+
+cap 函数可以知道缓冲区的容量
+
+len 函数获取当前通道内元素个数
+
+#### Goroutine 泄露
+
+发送响应结果给goroutine，若缓冲区已满，没有接收，则造成泄露
+
+泄露的goroutine不会自动回收，所以确保goroutine在不再需要的时候可以自动结束
+
+#### 组装流水线
+
+是对于通道和goroutine合适的比喻
+
+### 8.5 并行循环
+
+对于完全独立的子问题组成的问题为高度并行
+
+### 8.6 并发的web爬虫实例
+
+通道作技术信号量使用
+
+保持信号量操作离其所约束的IO操作越近越好
+
+```go
+var tokens = make(chan struct{}, 20)
+
+func crawl(url string) []string {
+  tokens <- struct{}{}
+  list, err := links.Extract(url)
+  <-tokens
+  if err != nil {
+    log.Print(err)
+  }
+  return list
+}
+```
+
+
+
+### 8.7 使用 select 多路复用
+
+多路复用，类似于 Promise.race；每种情况指定一次通信，发送或接收
+
+```go
+select {
+  case <- ch1:
+  case x := <- ch2:
+  case ch3 <- y:
+  default:
+}
+```
+
+select一直等待，直到一次通信来告知有些情况可以执行。然后，进行这次通信，执行此情况对应的语句；其他通信将不会发生。对于没有对应情况的 select，select{} 将永远等待
+
+如下例子在偶数时发送，在奇数时接收
+
+```go
+ch := make(chan int, 1)
+for i:= 0;i < 10;i++ {
+  select {
+    case x := <-ch:
+    	fmt.Println(x)
+    case ch <-i:
+  }
+}
+```
+
+select的default语句默认情况，用来指定在没有其他通信发生时可以立即执行的动作
+
+这将可以产生非阻塞通信，重复这个动作称为对通道轮询
+
+### 8.8 取消goroutine机制
+
+Select 中的case 有通道已被关闭的情况
+
+对于不再使用的通道不必显示关闭。如果没有goroutine引用这个通道，这个通道就会被垃圾回收。
+
+注意如果需要把关闭通道作为一个控制信号告知其他goroutine没有更多数据的情况下，需要显示关闭
+
+无缓冲的通道，则传值后立马close，则会在close之前阻塞，有缓冲的通道则即使close了也会继续让接收后面的值chanNum
+
+#### 关于close
+
+close函数是一个内建函数， 用来关闭channel，这个channel要么是双向的， 要么是只写的（chan<- Type）。
+
+这个方法应该只由发送者调用， 而不是接收者。
+
+**当最后一个发送的值都被接收者从关闭的channel(下简称为c)中接收时，接下来所有接收的值都会非阻塞直接成功，返回channel元素的零值。**
+
+如果c已经关闭（c中所有值都被接收）， x, ok := <- c， 读取ok将会得到false。

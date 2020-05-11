@@ -16,6 +16,7 @@ func main() {
 	s2 := []string{"456"}
 	Add(s1)
 	Add(s2)
+	fmt.Println(k(s1)) // q%!(EXTRA []string=[123])
 	fmt.Println(Count(s1), Count(s2))
 }
 
