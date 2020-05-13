@@ -287,7 +287,7 @@ func reverseString(s string) string {
 const (
     a = 1
     b
-    c = 1
+    c = 2
     d
 )
 
@@ -1574,3 +1574,301 @@ close函数是一个内建函数， 用来关闭channel，这个channel要么是
 **当最后一个发送的值都被接收者从关闭的channel(下简称为c)中接收时，接下来所有接收的值都会非阻塞直接成功，返回channel元素的零值。**
 
 如果c已经关闭（c中所有值都被接收）， x, ok := <- c， 读取ok将会得到false。
+
+#### 第8章的练习待巩固，第89章均是并发难点
+
+## 第9章使用共享变量实现并发
+
+### 9.1竞态
+
+对于绝大部分变量，如要回避并发访问，要么限制变量只存在于一个goroutine内，要么维护一个高层的*互斥不变量*
+
+竞态指在多个goroutine按某些交错顺序执行时程序无法给出正确的结果。
+
+#### 避免数据竞态的三种方法
+
+1. 不修改变量；这种方法无法用在存在更新的场景中
+2. 避免从多个goroutine访问同一个变量；必须使用通道来向受限goroutine发送查询请求或更新变量。使用通道请求代理一个受限变量的所有访问的goroutine称为该变量的监控。采用流水线的机制对变量进行*串行受限*。这是第八章的内容
+3. 允许多个goroutine访问同一个变量，但在同一时刻只有一个goroutine可以访问，即互斥机制
+
+### 9.2互斥锁：sync.Mutex
+
+用通道可以模拟一个信号量
+
+一个计数上限为1的信号量称为二进制信号量
+
+sync包有一个单独的Mutex类型来支持这种模式
+
+互斥锁不可再入，不能锁了又锁
+
+通过封装函数，可以解决互斥锁再入的问题
+
+### 9.3 读写互斥锁： sync.RWMutex
+
+允许只读操作并发执行，但写操作需要获得完全独享的访问权限。这种锁为多读单写锁，即sync.RWMutex
+
+RLock仅可用于在临界区域内对共享变量无写操作的情形
+
+仅在绝大部分goroutine都在获取读锁并且锁竞争比较激烈时，RWMutex才有优势。因为其内部需要更复杂的内部记事簿工作，所以在竞争不激烈时它比普通的互斥锁慢
+
+### 9.4 内存同步
+
+需要互斥锁的原因有两个
+
+- 防止该操作查到其他操作中间
+- 同步不仅涉及多个 goroutine 的执行顺序问题，同步还会影响到内存，故锁起来则可以达到内存同步。
+
+> 计算机一般有多个处理器，每个处理器都有内存的本地缓存，为了提高效率，对内存的写入是缓存在每个处理器中的，只在必要时才刷回内存。像通道通信和互斥锁操作这样的同步原语，都会导致处理器把累积的写操作刷回内存并提交，所以这个时刻goroutine的执行结果就保证了对运行在其他处理器的goroutine可见
+
+考虑如下代码：
+
+```go
+var x, y int
+go func() {
+  x = 1
+  fmt.Print("y:", y, " ")
+}()
+go func() {
+  y = 1
+  fmt.Print("x:", x, " ")
+}()
+```
+
+如果输出如下结果，则超乎我们的意料了：
+
+x:0 y:0
+
+y:0 x:0
+
+原因和某些特定的编译器和CPU有关，详见P209
+
+### 9.5 延迟初始化 sync.Once
+
+不先释放一个共享锁，就无法直接把它升级为互斥锁
+
+sync.Once 包含一个布尔变量和一个互斥量；布尔变量记录初始化是否已经完成，互斥量则保证这个布尔变量和客户端的数据结构
+
+sync.Once 适合延迟初始化同步
+
+```go
+func loadIcons() {
+  icons = map[string]image.Image{
+    "spades.png": loadIcon("spades.png")
+    ...
+  }
+}
+
+var loadIconsOnce sync.Once
+var icons map[string]image.Image
+// 并发安全
+func Icon(name string) image.Image {
+  loadIconsOnce.Do(loadIcons)
+  return icons[name]
+}
+```
+
+Do函数内部就是先检查是否已置done为已生成，没生成则使用锁锁住初始化的过程，生成则直接return
+
+### 9.7 并发非阻塞缓存
+
+函数记忆
+
+重复抑制：避免重复额外的处理
+
+两种方案构建并发结构：
+
+- 共享变量上锁
+- 通信顺序进程
+
+
+
+#### 共享变量上锁
+
+和传统模型类似，易懂
+
+```go
+package memo
+
+import "sync"
+
+// Func is the type of the function to memoize.
+type Func func(string) (interface{}, error)
+
+type result struct {
+	value interface{}
+	err   error
+}
+
+//!+
+type entry struct {
+	res   result
+	ready chan struct{} // closed when res is ready
+}
+
+func New(f Func) *Memo {
+	return &Memo{f: f, cache: make(map[string]*entry)}
+}
+
+type Memo struct {
+	f     Func
+	mu    sync.Mutex // guards cache
+	cache map[string]*entry
+}
+
+func (memo *Memo) Get(key string) (value interface{}, err error) {
+	memo.mu.Lock()
+	e := memo.cache[key]
+	if e == nil {
+		// This is the first request for this key.
+		// This goroutine becomes responsible for computing
+		// the value and broadcasting the ready condition.
+		e = &entry{ready: make(chan struct{})}
+		memo.cache[key] = e
+		memo.mu.Unlock()
+
+		e.res.value, e.res.err = memo.f(key)
+
+		close(e.ready) // broadcast ready condition
+	} else {
+		// This is a repeat request for this key.
+		memo.mu.Unlock()
+
+		<-e.ready // wait for ready condition
+	}
+	return e.res.value, e.res.err
+}
+
+//!-
+
+```
+
+
+
+
+
+#### 通信顺序进程
+
+存在通道传值，阅读代码会跳跃
+
+```go
+package memo
+
+//!+Func
+
+// Func is the type of the function to memoize.
+type Func func(key string) (interface{}, error)
+
+// A result is the result of calling a Func.
+type result struct {
+	value interface{}
+	err   error
+}
+
+type entry struct {
+	res   result
+	ready chan struct{} // closed when res is ready
+}
+
+//!-Func
+
+//!+get
+
+// A request is a message requesting that the Func be applied to key.
+type request struct {
+	key      string
+	response chan<- result // the client wants a single result
+}
+
+type Memo struct{ requests chan request }
+
+// New returns a memoization of f.  Clients must subsequently call Close.
+func New(f Func) *Memo {
+	memo := &Memo{requests: make(chan request)}
+	go memo.server(f)
+	return memo
+}
+
+func (memo *Memo) Get(key string) (interface{}, error) {
+	response := make(chan result)
+	memo.requests <- request{key, response}
+	res := <-response
+	return res.value, res.err
+}
+
+func (memo *Memo) Close() { close(memo.requests) }
+
+//!-get
+
+//!+monitor
+
+func (memo *Memo) server(f Func) {
+	cache := make(map[string]*entry)
+	for req := range memo.requests {
+		e := cache[req.key]
+		if e == nil {
+			// This is the first request for this key.
+			e = &entry{ready: make(chan struct{})}
+			cache[req.key] = e
+			go e.call(f, req.key) // call f(key)
+		}
+		go e.deliver(req.response)
+	}
+}
+
+func (e *entry) call(f Func, key string) {
+	// Evaluate the function.
+	e.res.value, e.res.err = f(key)
+	// Broadcast the ready condition.
+	close(e.ready)
+}
+
+func (e *entry) deliver(response chan<- result) {
+	// Wait for the ready condition.
+	<-e.ready
+	// Send the result to the client.
+	response <- e.res
+}
+
+//!-monitor
+
+```
+
+### 9.8 goroutine与线程
+
+#### 可增长的栈
+
+每个OS线程都有一个固定大小的栈内存，通常为2MB，固定栈大小在很多场景下不够灵活
+
+作为对比，一个 goroutine 在生命周期开始时只有一个很小的栈，典型情况下为2KB，可以按需增大和缩小
+
+#### OS 调度
+
+OS调度线程的大致流程
+
+OS线程由OS内核调度。每隔几毫秒，一个硬件时钟中断发送到CPU，CPU调用一个叫调度器的内核函数。该函数暂停当前正在运行的线程，把它的寄存器信息保存到内存，查看线程列表并决定接下来运行哪一个线程，再从内存恢复线程的注册表信息，最后继续执行选中的线程。
+
+OS线程由内核调度，所以控制权限从一个线程到另一个线程需要一个完整的上下文切换：即保存一个线程状态到内存，再恢复另外一个线程的状态，最后更新调度器的数据结构。
+
+上述操作涉及内存局域性以及涉及内存访问数量，还有访问内存所需的CPU周期数量的增加，该操作其实很慢
+
+#### Goroutine 调度
+
+Go 运行时 包含一个自己的调度器，该调度器使用一个称为 m:n 调度的技术，因为它可以复用/调度 m 个 goroutine 到 n 个OS线程。Go调度器与内核调度器的工作类似，但Go调度器只需关心单个 Go程序的 goroutine 调度问题
+
+Go 调度器不是由硬件时钟来定期触发的，而是由特定的Go 语言结构触发的。如当一个 goroutine 调用 time.Sleep 或被通道阻塞或互斥量操作时，调度器会将这个 goroutine 设置为休眠模式，并运行其他 goroutine 直到前一个可重新唤醒为止。因为它不需要切换内核语境，所以调用一个 goroutine 比调度 一个线程成本低很多。
+
+#### GOMAXPROCS
+
+Go 调度器使用 GOMAXPROCS 参数来确定使用多少个 OS 线程来同时执行 Go 代码。默认值是机器上的 CPU 数量。
+
+GOMAXPROCS 是m:n 调度中的 n。
+
+正在休眠或正被通道通信阻塞的 goroutine 不需要占用线程。阻塞在 IO 和其他系统调用中或调用非Go 语言写的函数的 goroutine 需要一个独立的OS线程，但这个线程不计算在GOMAXPROCS 内
+
+#### Goroutine 没有标识
+
+当前线程都有一个独特标识，通常可以取一个整数或指针，这个特性可以构建一个 线程的局部存储，本质上是一个全局 map，这样线程可以独立地用这个 map 存储和获取值，并互不干扰
+
+但这样会导致一种不健康的”超距作用“，即函数的行为不仅取决于其参数，还取决于运行它的线程标识
+
+所以，goroutine 没有可供程序员访问的标识，能影响一个函数行为的参数应当是显式指定的。
