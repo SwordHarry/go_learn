@@ -1,6 +1,11 @@
 # Go
 
 ## 第一章 入门
+
+利用注释生成文档，在测试中加入 Example
+
+使用 go doc 和 godoc 查看和生成文档
+
 ### Goroutine
 ### tcmalloc
 ### 垃圾回收：gc 堪用，离好用还有一段距离
@@ -177,21 +182,21 @@ init 函数不能被调用和引用
 
 ## 第三章 基本数据
 
-Go的数据类型有：
+Go的数据类型有：**后跟零值**
 - 基础类型
-    - 数字
-    - 字符串
-    - 布尔
+    - 数字 0
+    - 字符串 ""
+    - 布尔 false
 - 聚合类型
-    - 数组
-    - 结构体
+    - 数组 内部各元素的零值组成的数组
+    - 结构体 内部各属性的零值组成的结构体
 - 引用类型：间接指向程序变量或状态
-    - 指针
-    - slice
-    - map
-    - 函数
-    - channel通道
-- 接口类型
+    - 指针 nil
+    - slice nli
+    - map nil
+    - 函数 nil
+    - channel通道 nil
+- 接口类型 nil
 
 
 ### 3.1 整数
@@ -243,8 +248,6 @@ i和j的默认值分别是0和`len(s)`
 由于字符串不可变，因此按照增量方式构建字符串会导致多次内存分配和复制。因此，使用 byte.Buffer 类型会更高效
 ##### strconv
 用于在 布尔值、整数、浮点数 和 与之对应的字符串 之间的互相转换
-
-
 
 ##### unicode
 判别文字符号值特性的函数，如是否是字母，大小写等
@@ -455,7 +458,7 @@ Cap 省略的情况下，len 和 cap 相同
 内置的 append 函数使用了复杂的增长策略。
 
 - 不清楚会不会导致一次新的内存分配
-- 不能假设原始 slice 和 append 后的结果指向同一个底层数组
+- 不能假设原始 slice 和 append 后的结果指向同一个底层数组(**append操作可能会导致原本使用同一个底层数组的两个Slice变量变为使用不同的底层数组。**)
 - 不能证明它们就指向不同的底层数组
 - 无法假设对旧 slice 的操作是否会影响新的 slice 元素
 
@@ -1555,6 +1558,20 @@ select的default语句默认情况，用来指定在没有其他通信发生时�
 
 这将可以产生非阻塞通信，重复这个动作称为对通道轮询
 
+
+
+例子，800ms后timeout
+
+```go
+select {
+  ...
+  case <-time.After(800 * time.Millisecond):
+  	fmt.Println("timeout")
+}
+```
+
+
+
 ### 8.8 取消goroutine机制
 
 Select 中的case 有通道已被关闭的情况
@@ -1590,6 +1607,11 @@ close函数是一个内建函数， 用来关闭channel，这个channel要么是
 1. 不修改变量；这种方法无法用在存在更新的场景中
 2. 避免从多个goroutine访问同一个变量；必须使用通道来向受限goroutine发送查询请求或更新变量。使用通道请求代理一个受限变量的所有访问的goroutine称为该变量的监控。采用流水线的机制对变量进行*串行受限*。这是第八章的内容
 3. 允许多个goroutine访问同一个变量，但在同一时刻只有一个goroutine可以访问，即互斥机制
+
+
+
+- Mutex
+- Cond
 
 ### 9.2互斥锁：sync.Mutex
 
@@ -1872,3 +1894,430 @@ GOMAXPROCS 是m:n 调度中的 n。
 但这样会导致一种不健康的”超距作用“，即函数的行为不仅取决于其参数，还取决于运行它的线程标识
 
 所以，goroutine 没有可供程序员访问的标识，能影响一个函数行为的参数应当是显式指定的。
+
+## 第10章 包和go工具
+
+go程序的编译比其他语言要快，即便从零开始编译。这里有三个原因
+
+1. 所有的的导入都必须在每一个源文件开头进行显式列出，这样编译器在确定依赖性时就不需要读取和处理整个文件
+2. 包的依赖性形成有向无环图，因为没有环，所以包可以独立甚至进行编译。
+3. Go包编译输出的目标文件不仅记录它自己的导出信息，还记录它所依赖包的导出信息。
+
+#### 导入路径
+
+每个包的唯一字符串标识
+
+包名是导入路径的最后一段
+
+最后一段有三个例外：
+
+1. 不管包的导入路径是什么，如果该包定义一条命令，可执行的Go程序，那么它总是使用名称main。这是告诉 go build 的信号，它必须调用连接器生成可执行文件
+2. _test.go 结尾的go文件，会有另一包名，这样一个目录中有两个包：一个普通的和一个外部测试包
+3. 版本号后缀不属于包名
+
+导入的包可以通过空行进行分组
+
+#### 重命名导入
+
+如果两个名字一样但路径不一样的包进行导入，导入声明就必须为其中一个指定一个替代名字来避免冲突
+
+```go
+import (
+	"crypto/rand"
+  mrand "math/rand"
+)
+```
+
+使用一个替代名字有助于规避常见的局部变量冲突
+
+#### 空导入
+
+如果导入的包的名字没有在文件中引用，会产生编译错误
+
+但是，有时候，导入包是为了利用其副作用：对包级别的变量执行初始化表达式求值，并执行它的init函数。使用一个替代的名字 `_` ，这表示导入的内容为空白标识符
+
+#### 包及其命名
+
+单一类型包，导出一个数据类型及其方法，通常有一个New 函数用来创建实例
+
+### 10.7 go 工具
+
+#### GOPATH
+
+Src 子目录包含源文件
+
+bin 子目录放置可执行程序
+
+Pkg 子目录是构建工具存储编译后的包的位置
+
+#### GOROOT
+
+指定发行版的GO的根目录
+
+#### 包的下载
+
+go get
+
+指定 -u 开关，将确保它访问的所有包，更新到最新版本
+
+#### 包的构建
+
+go build
+
+go install 和 go build 类似，区别是它会保存每一个包的编译代码和命令，编译后的包存放于$GOPATH/pkg 中
+
+###### 构建标签
+
+特殊注释，提供构建的更细粒度的控制
+
+```go
+// +build linux darwin
+// +build ignore
+```
+
+只在构建 Linux 或 Mac OS X 系统应用的时候才会对其编译
+
+任何时候不要编译
+
+#### 包的文档化
+
+包声明前面的文档注释被认为是整个包的文档注释，尽管可以出现在任何文件中，但是必须只有一个
+
+go doc 命令
+
+#### 10.7.5 内部包
+
+go build 工具会特殊对待导入路径中包含路径片段 **internal** 的情况。这些包叫内部包。内部包只能被另一个包导入，并且这个包位于以 internal 目录的父目录为根目录的树中。
+
+如，给定下面的包，net/http/internal/chunked 可以从 net/http/httputil 或 net/http 导入，但是不能从 net/url 导入。然而，net/url 可以导入 net/http/httputil
+
+#### 包的查询
+
+go list
+
+可以包含 ... 通配符，列出一个Go工作区间中所有包
+
+go list ...
+
+go list gopl.io/ch3/...
+
+go list  ...xml...
+
+go list -json hash
+
+## 第11章 测试
+
+#### go test 工具
+
+以 _test.go 结尾的文件不是 go build 命令编译的目标，而是 go test 编译的目标
+
+在 _test.go 文件中，有三种函数需要特殊对待
+
+- 功能测试函数
+- 基准测试函数
+- 示例函数
+
+功能测试函数以 Test 前缀命名的函数，用来检测程序逻辑的正确性。go test 运行测试函数，并报告结果是PASS还是FAIL
+
+基准测试函数以 Benchmark 开头，用来测试某些操作的性能，go test 汇报操作的平均执行时间
+
+示例函数以 Expample 开头，提供机器检查过的文档
+
+go test 工具扫描 *_test.go 文件来寻找特殊函数，并生成一个临时的 main 包来调用它们，最后清空临时文件
+
+### 11.2 Test函数
+
+每个测试文件都必须导入一个 testing 包
+
+功能测试函数必须以Test开头，后缀名必须以大写字母开头：
+
+```go
+func TestName(t *testing.T) {}
+```
+
+参数 t 提供了汇报测试失败和日志记录的功能
+
+t.Error t.Errorf 汇报错误
+
+go test -v 输出包中每个测试用例的名称和执行时间
+
+go test -run 正则表达式，运行匹配函数
+
+```shell
+go test -run="TestPalindrome"
+```
+
+##### 基于表的测试方式
+
+```go
+func TestIsPalindrome(t *testing.T) {
+	var tests = []struct {
+		input string
+		want  bool
+	}{
+		{"", true},
+		{"a", true},
+		{"aa", true},
+		{"ab", false},
+		{"kayak", true},
+		{"detartrated", true},
+		{"A man, a plan, a canal: Panama", true},
+		{"Evil I did dwell; lewd did I live.", true},
+		{"Able was I ere I saw Elba", true},
+		{"été", true},
+		{"Et se resservir, ivresse reste.", true},
+		{"palindrome", false}, // non-palindrome
+		{"desserts", false},   // semi-palindrome
+	}
+	for _, test := range tests {
+		if got := IsPalindrome(test.input); got != test.want {
+			t.Errorf("IsPalindrome(%q) = %v", test.input, got)
+		}
+	}
+}
+```
+
+测试用例彼此独立，宕机不会影响，若要影响，则使用 t.Fatal
+
+测试错误消息一般格式是`f(x)`=y,want z
+
+
+
+#### 白盒测试
+
+这种测试通过同一个包可以拿到未导出的变量或函数，但是对于全局变量的更改是存在风险的，注意要用 defer 改回
+
+#### 外部测试包
+
+解决循环引用
+
+GoFiles
+
+TestGoFiles
+
+XTestGoFiles
+
+export_test.go 用于导出原不能导出的变量
+
+#### 覆盖率
+
+go test -coverprofile=c.out
+
+go tool cover -html=c.out
+
+### 11.4 Benchmark 函数
+
+提供一个 *testing.B 参数来提供和 *testing.T 类似的方法，额外增加了一些与性能检测相关的方法，还提供整型成员N，来指定被检测操作的执行次数
+
+```go
+func BenchmarkIsPalindrome(b *testing.B) {
+  for i:= 0;i < b.N;i++ {
+    IsPalindrome("A man, a plan, a canal: Panama")
+  }
+}
+```
+
+和测试不同，-bench 参数指定要运行的基准测试， . 匹配包中所有
+
+最快的程序通常是那些进行内存分配次数最少的程序
+
+-benchmem 记录内存分配统计数据
+
+基准测试比较，相对耗时
+
+### 11.5 性能剖析
+
+Go 支持多种性能剖析方式
+
+CPU性能剖析：识别出执行过程中需要CPU最多的函数。
+
+堆性能剖析：识别出负责分配最多内存的语句
+
+阻塞性能剖析：识别出那些阻塞协程最久的操作
+
+go test -cpuprofile=cpu.out
+
+go test -blockprofile=block.out
+
+go test -memoryprofile=mem.out
+
+### 11.6 Example 函数
+
+示例函数，名字以 Example 开头，既无参数也无结果
+
+示例函数有三个目的：
+
+1. 作为文档使用
+2. 它们是可以通过 go test 运行的可执行测试
+3. 提供手动实验代码
+
+## 第12章 反射
+
+在编译时不知道类型的情况下，更新变量，在运行时查看值，调用方法或直接改变布局
+
+如：fmt包提供的字符串格式化功能，encoding/json 或 encoding/xml 提供的协议编码功能，text/template 和 html/template 提供的模板机制
+
+#### 为什么使用反射
+
+类型无法共享同一个接口
+
+类型布局未知
+
+类型在设计函数时还不存在
+
+### 12.2 reflect.Type 和 reflect.Value
+
+#### TypeOf
+
+reflect.TypeOf 函数接受任何的 interface{} 参数，并且把接口中的动态类型以 reflect.Type 形式返回
+
+因为返回的是一个接口值对应的动态类型，所以它总是返回具体类型，而不是接口类型
+
+#### valueOf
+
+reflect.ValueOf 接受任意的 interface{} 并将接口的动态值以 reflect.Value 的形式返回
+
+reflect.Type 和 reflect.Value 均满足了 fmt.Stringer
+
+reflect.Value 和 interface{} 都可以包含任意值。二者区别是空接口隐藏了值的布局信息、内置操作和相关方法；而 Value 有很多方法可以用来分析所包含的值，而不用知道它的类型
+
+**非导出字段在反射下是可见的，但是这些私有字段可能会随着库演进而改变**
+
+### 12.5 使用reflect.Value来设置值
+
+对于reflect.Value，有区分，某些是可寻址的，某些不可。如下变量
+
+```go
+x := 2
+a := reflect.ValueOf(2)
+b := reflect.ValueOf(x)
+c := reflect.ValueOf(&x)
+d := c.Elem()
+```
+
+a不可寻址，因为仅仅是包含整数2的一个副本，b和c也如此。
+
+通过 reflect.ValueOf(x)返回的 reflect.Value 都是不可寻址的。
+
+但是 d 通过 c 中的指针得来，是可寻址的。
+
+通过这个方法，调用 `reflect.ValueOf(&x).Elem()` 来获得任意变量x可寻址的 Value值
+
+CanAddr 方法来询问 reflect.Value 变量是否可寻址
+
+可寻址的常见规则都在反射包里有对应项。如 slice e[i] 和 reflect.ValueOf(e).Index(i)
+
+#### 通过反射设置值
+
+从一个可寻址的 reflect.Value() 获取变量需要三步。
+
+1. 调用Addr()获取Value，包含一个指向变量的指针
+
+2. 调用Interface()，返回一个包含该指针的 interface{}值。
+
+3. 若知道变量类型，则使用类型断言进行转换
+
+```go
+x := 2
+d := reflect.ValueOf(&x).Elem()
+px := d.Addr().Interface().(*int)
+*px = 3
+fmt.Println(x) // 3
+```
+
+
+
+还可以通过可寻址的 reflect.Value 来更新变量，直接调用 reflect.Value.Set 方法
+
+```go
+d.Set(reflect.ValueOf(4))
+fmt.Println(x)
+```
+
+
+
+在一个不可寻址的值上使用Set将崩溃，赋类型不匹配也会崩溃
+
+除了Set，还有为基本类型特化的Set变种：SetInt SetUint SetString SetFloat
+
+特化方法还有一定的容错性
+
+#### 可寻址且可更改
+
+反射可以读取到未导出结构字段的值，但反射不能更新这些值
+
+一个可寻址的 reflect.Value 会记录它是否是通过遍历一个未导出字段来获得的。如果是这样，则不能修改。
+
+CanSet 方法才是正确报告一个 reflect.Value 是否可寻址且可更改
+
+### 12.6 S表达式解码器
+
+json.Unmarshal 函数内部使用了反射
+
+#### 显示类型的方法
+
+reflect.Type 和 Value 都有一个 Method 的方法。
+
+每个 t.Method(i) 都会返回一个 reflect.Method 类型的实例，这个结构类型描述了这个方法的名称和类型。t.Method(i).Name 返回函数名
+
+每个 v.Method(i) 都会返回一个 reflect.Value 代表一个方法值，即一个绑定接收者的方法。v.Method(i).Type 返回 函数签名，但不包含函数名
+
+使用 reflect.Value.Call 方法可以调用 Func 类型的 Value。
+
+### 12.9 反射的注意事项
+
+反射虽然是一个功能和表达能力都很强大的工具，但应该谨慎使用它，原因有三个：
+
+1. 基于反射的代码是很脆弱的。反射错误要等到执行时才会以崩溃的形式报告；并且降低了自动重构和分析工具的安全性与准确度，因为它们无法检测到类型信息。
+
+   解决：确保反射的使用完整地封装在包里，尽量使用特定的类型来确保输入是合法的值
+
+   若做不到，则在每个危险操作前都做额外的动态检查
+
+2. 类型也算是某种文档，大量使用反射的代码是难以理解的
+
+   对于接受 interface{} 或 reflect.Value 的函数，一定要写清楚期望的参数类型和限制条件
+
+3. 基于反射的函数会比为特定类型优化的函数慢一两个数量级。
+
+
+
+
+
+## 第13章 低级编程
+
+使用unsafe包中的内容也无法保证和Go未来的发布版兼容，因为无论是无意还是有意，这个包里面的内容都会依赖一些未知的实现细节，而它们可能发生未知的变化。
+
+偶尔通过放弃一些有益保障来实现最可能的高性能，和其他语言编写的库进行交互或者实现一个无法使用Go描述的函数
+
+unsafe包内部通过编译器实现
+
+#### 对齐算法
+
+在类型的值在内存中对齐的情况下，计算机的加载或者写入将会很高效
+
+内存空位是由编译器添加的未使用的内存地址，用来确保读取的成员或者元素相对于结构体或数组的起始地址是对齐的
+
+编译器内部对于内存对齐的实现
+
+关于内存对齐的api：Sizeof Alignof Offsetof
+
+### 13.2 unsafe.Pointer
+
+uintptr 和 unsafe.Pointer 之间慎用
+
+若为移动垃圾回收器，则会出bug
+
+uintptr仅仅是一个数值，当内存移动时，其值不会改变
+
+而 unsafe.Pointer 是一个指针，当内存移动时，发生改变
+
+#### 13.3 深度相等
+
+使用反射实现深度比较
+
+### 13.4 cgo调用c代码
+
+cgo，用来为c函数创建go绑定的工具
+
+
